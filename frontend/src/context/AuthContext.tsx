@@ -45,41 +45,44 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, [user, accessToken]);
 
   useEffect(() => {
-    // Check token or rehydrate via refresh cookie on app load
+    // Bootstrap authentication before rendering the application. The access
+    // token intentionally lives only in memory, so a full page load normally
+    // starts without one. If there is no valid in-memory token, use the
+    // HttpOnly refresh cookie exactly once to establish the session before
+    // protected routes or requests can run.
     const rehydrateOrCheck = async () => {
       const currentToken = tokenStorage.getAccessToken();
 
       if (currentToken && !isTokenExpired(currentToken)) {
         setAccessTokenState(currentToken);
         setIsLoading(false);
-      } else if (currentToken && isTokenExpired(currentToken)) {
-        console.warn('Access token expired, clearing authentication state');
+        return;
+      }
+
+      // An expired token is not a reason to skip bootstrap: the refresh cookie
+      // may still represent a valid session. Clear the stale access token and
+      // perform the same initial refresh path used after a full page load.
+      tokenStorage.clearTokens();
+      setUserState(null);
+      setAccessTokenState(null);
+
+      try {
+        const response = await authApi.refresh();
+
+        if (response.accessToken && !isTokenExpired(response.accessToken)) {
+          tokenStorage.setAccessToken(response.accessToken);
+          setAccessTokenState(response.accessToken);
+          if (response.user) {
+            setUserState(response.user);
+          }
+        }
+      } catch {
+        // No valid refresh session: remain unauthenticated.
         tokenStorage.clearTokens();
         setUserState(null);
         setAccessTokenState(null);
+      } finally {
         setIsLoading(false);
-      } else {
-        // Attempt silent token refresh via HttpOnly cookie on initial load
-        try {
-          const response = await authApi.refresh();
-          if (response.accessToken && !isTokenExpired(response.accessToken)) {
-            tokenStorage.setAccessToken(response.accessToken);
-            setAccessTokenState(response.accessToken);
-            if (response.user) {
-              setUserState(response.user);
-            }
-          } else {
-            tokenStorage.clearTokens();
-            setUserState(null);
-            setAccessTokenState(null);
-          }
-        } catch {
-          tokenStorage.clearTokens();
-          setUserState(null);
-          setAccessTokenState(null);
-        } finally {
-          setIsLoading(false);
-        }
       }
     };
 
